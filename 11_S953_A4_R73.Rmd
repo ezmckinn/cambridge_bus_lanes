@@ -1,0 +1,307 @@
+---
+title: "Assignment 4: Evaluating Impact of Bus Priority Lanes"
+author: "Emmett"
+date: "12/15/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+setwd("/Users/emmettmckinney/Dropbox (MIT)/DUSP_Courses/DUSP_Fall_2019/11_S953/AVL_2019")
+library("chron")
+library("rio")
+library("dplyr")
+library("ggplot2")
+```
+
+**Summary**
+
+This assignment evaluates the impact on travel times and reliability from adding bus priority lanes along several key routes. This analyses focuses in particular on the R73 and R73 routes on Mt. Auburn Street in Cambridge, as well as Route 1, along South Massachusetts Avenue in front of MIT. The R code here conducts a single analysis for the R73 routes, which is replicated in identical scripts for the R73 and R1. Impacts on total travel time through the corridor, as well as the variability of travel times, are measured for each corridor at the AM, mid-day, and PM peaks. Seasonal variability is included. These analyses focus on data from 2017 and 2018, to highlight the change immediately before and after the introduction of the priority lanes.
+
+**Results**
+
+```{r}
+#read in data
+R73_in <- import("Mt Auburn St/cleaned_R73_in.csv") 
+R73_out <- import("Mt Auburn St/cleaned_R73_out.csv")
+```
+
+```{r}
+##define a function to measure the time difference between the beginning and end of a route
+timetravel <- function(df,...){mutate(df, run_time = as.numeric(difftime(max(df$time), min(df$time)), units = 'mins')) ##calculate the difference in time between the latest time stamp within a group and the earliest 
+}
+```
+
+```{r}
+##INBOUND##
+
+R73_in$time <- as.POSIXct(R73_in$actstoptime, format = "%H:%M:%S") #change time data to timestamp
+R73_in <- R73_in %>% group_by(trip) %>% filter(n() >= 4) 
+##filter out any R groups with fewer than 4 rows (i.e. which didn't run the whole route)
+R73_in_grouped <- group_modify(R73_in, timetravel) ##run this function on each group 
+R73_in_TT <- summarize(group_by(R73_in_grouped, trip), run_time = mean(run_time)) ##summarize the total travel time for each trip 
+R73_in_clean <- left_join(R73_in_TT, R73_in, by = "trip")  ##join this back to the original data frame
+R73_in_clean <- mutate(R73_in_clean, peak =  ##label the different peak periods
+                   if_else(actstoptime >='7:30:00' & actstoptime <= '9:30:00',"am",
+                    if_else(actstoptime >='12:00:00' & actstoptime <= '14:00:00',"mid",
+                      if_else(actstoptime >='16:30:00' & actstoptime <= '18:30:00',"pm",
+                 "other")))) %>%  
+    filter(year >=2017) %>% ##filter only for 2017 & 2018
+   filter(stopid == min(stopid)) #get total run time for each route, tagged to the earliest stop
+R73_in_clean$seasonal_period <- as.factor(R73_in_clean$seasonal_period)
+R73_in_clean$implemented <- as.factor(R73_in_clean$implemented)
+```
+
+```{r}
+##OUTBOUND##
+
+R73_out$time <- as.POSIXct(R73_out$actstoptime, format = "%H:%M:%S") #change time data to timestamp
+
+R73_out <- R73_out %>% group_by(trip) %>% filter(n() >= 4) ##filter for complete trips
+
+R73_out_grouped <- group_modify(R73_out, timetravel) ##run this function on each group 
+
+R73_out_TT <- summarize(group_by(R73_out_grouped, trip), run_time = mean(run_time)) ##summarize the total travel time for each trip 
+
+R73_out_clean <- left_join(R73_out_TT, R73_out, by = "trip")  ##join this back to the original data frame
+
+R73_out_clean <- mutate(R73_out_clean, peak =  ##label the different peak periods
+                   if_else(actstoptime >='7:30:00' & actstoptime <= '9:30:00',"am",
+                    if_else(actstoptime >='12:00:00' & actstoptime <= '14:00:00',"mid",
+                      if_else(actstoptime >='16:30:00' & actstoptime <= '18:30:00',"pm",
+                 "other")))) %>%
+  filter(stopid == min(stopid)) #get the total run time for each route, tagged to the earliest stop
+R73_out_clean$seasonal_period <- as.factor(R73_out_clean$seasonal_period)  
+R73_out_clean$implemented <- as.factor(R73_out_clean$implemented)
+```
+
+```{r}
+compare_in <- R73_in_clean %>% group_by(implemented, peak) %>% #group by peak time and whether it was before or after priority lane implementation
+                            summarise(median = mean(run_time), sd = sd(run_time))
+before <- compare_in %>% filter(implemented == 0) #break up run times by each timee
+after  <- compare_in %>% filter(implemented == 1)
+
+compare_in <- left_join(before, after, by = "peak") %>% #re-arrange to find change in run time 
+  mutate(change_time = median.y - median.x) %>%
+  mutate(change_sd = sd.y - sd.x) %>%
+  subset(select = c(peak, median.x, median.y, sd.x, sd.y, change_time, change_sd)) %>% #select relevant columns 
+  rename(median_before = median.x, median_after = median.y, sd_before = sd.x, sd_after = sd.y) %>% #rename columns 
+  mutate(direction = "Inbound") %>% #label direction
+  mutate(route = "R73")
+
+#repeat for outbound
+
+compare_out <- R73_out_clean %>% group_by(implemented, peak) %>%
+                            summarise(median = mean(run_time), sd = sd(run_time))
+before <- compare_out %>% filter(implemented == 0)
+after  <- compare_out %>% filter(implemented == 1)
+
+compare_out<- left_join(before, after, by = "peak") %>% 
+  mutate(change_time = median.y - median.x) %>%
+  mutate(change_sd = sd.y - sd.x) %>%
+  subset(select = c(peak, median.x, median.y, sd.x, sd.y, change_time, change_sd)) %>%
+  rename(median_before = median.x, median_after = median.y, sd_before = sd.x, sd_after = sd.y) %>%
+  mutate(direction = "Outbound")  %>%
+  mutate(route = "R73")
+
+results_73 <- rbind(compare_out, compare_in)
+compare_in
+compare_out
+results_73
+
+write.csv(results_73, file = "../R73_results.csv")
+```
+
+The introduction of the bus priority lane significantly reduced median travel times on the R73 route -- although these effects varied by time of day and season. Viewed at level of the entire day, the R73 inbound bus showed statistically significant time savings during the AM peak, equaling approximately 1 minutes and 33 seconds. The difference in median travel times for the R73 inbound route during the mid-day and evening periods fell within the margin of error. The R73 outbound experienced statistically significant time savings only during the PM peak: approximately 2 minutes and 8 seconds over the course of this corridor. The effects for the mid-day and am peaks fell within the margin of error, and this effect held true for analyses at both the entire-day and peak-period analyses. It makes sense that the introduction of the bus lane would have the highest effect for the Inbound R73 in the morning, and the Outbound R73 in the evening, as these flows correspond to commuter movement.
+
+With regards to reliability, both Inbound and Outbound routes experienced significant gains in reliability during the pm peaks. The standard deviation for travel times through the corridor fell by 1.14 sd's (approx 1 minute 8 seconds) during the outbound PM peak, and by 1.62 sd's (approximately 1 minute 37 seconds) during the inbound PM peak. Notably, the outbound AM peak became significantly less reliable, with the standard deviation for arrival times increasing by 3 minutes and 20 seconds.
+
+An analysis of seasonal variability found that for bouth inbound and outbound routes, Season (September-October) had higher travel times than the annual average for the corridor, and Season 2  (Late November - Early December) had lower travel times for the corridor. For the Mt. Auburn corridor, this seasonal dip could relate to the university holiday schedule, as students, faculty, and staff may be gone for the holidays and therefore less likely to be traveling, resulting in lower congestion and smoother travel times.
+
+The seasonal effect of the introduction of the bus priority lane is only evident for Season 2, relative to Null -- though in both directions, the seasonal change in travel times resulting from the introduction of the bus lane was statistically significant. The outbound 73 shows savings around the PM peak, resulting in savings of 4 minutes around 6:00 pm for the "NULL" period, and savings of approximately 2 minutes around 6:00 pm for Season 2. The inbound 73 shows savings in the AM peak, around 2 minutes and 30 seconds around 8:45 am.
+
+**Visualization: Change in Travel Times by Time of Day**
+
+*R73 Inbound*
+```{r}
+#Overall
+
+time_change_overall_in <-ggplot(R73_in_clean, aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented))) +
+  geom_point(aes(x=time, y=run_time, color = peak), size = 0.5) + 
+  ggtitle("Mt. Auburn Corridor Trip Times by Time of Day, R73 Inbound") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_overall_in
+ggsave( "../r73_time_change_overall_in.png", plot=last_plot())
+
+# AM PEAK
+time_change_am_in<-ggplot(filter(R73_in_clean, peak == "am"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "red") + 
+  ggtitle("Mt. Auburn Corridor Trip Times, AM Peak, R73 Inbound") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_am_in
+ggsave( "../r73_time_change_am_in.png", plot=last_plot())
+
+#MID DAY
+time_change_mid_in <-ggplot(filter(R73_in_clean, peak == "mid"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "green") + 
+  ggtitle("Mt. Auburn Corridor Trip Times, Mid-Day, R73 Inbound") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_mid_in
+ggsave( "../r73_time_change_mid_in.png", plot=last_plot())
+
+#PM PEAK
+time_change_pm_in <-ggplot(filter(R73_in_clean, peak == "pm"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "violet") +
+  ggtitle("Mt. Auburn Corridor Trip Times, PM Peak, R73 Inbound") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_pm_in
+ggsave( "../r73_time_change_pm_in.png", plot=last_plot())
+```
+
+*R73 Outbound*
+```{r}
+#Overall - Outbound
+
+time_change_overall_out <-ggplot(R73_out_clean, aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "black",  se = TRUE, level = 0.95) +
+  geom_point(aes(x=time, y=run_time, color = peak), size = 0.5) + 
+  ggtitle("Mt. Auburn Corridor Trip Times by Time of Day, R73 Outbound") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_overall_out
+ggsave( "../r73_time_change_pm_in.png", plot=last_plot())
+
+# AM PEAK
+time_change_am_out<-ggplot(filter(R73_out_clean, peak == "am"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "red") +
+  ggtitle("Mt. Auburn Corridor Trip Times by Time of Day, R73 Outbound: AM Peak") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_am_out
+ggsave( "../r73_time_change_am_out.png", plot=last_plot())
+
+#MID DAY
+time_change_mid_out <-ggplot(filter(R73_out_clean, peak == "mid"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "green") +
+  ggtitle("Mt. Auburn Corridor Trip Times by Time of Day, R73 Outbound: Mid-Day") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_mid_out
+ggsave( "../r73_time_change_mid_out.png", plot=last_plot())
+
+#PM PEAK
+time_change_pm_out <-ggplot(filter(R73_in_clean, peak == "pm"), 
+  aes(x=time, y=run_time, group=implemented)) +
+  geom_smooth(aes(linetype=as.factor(implemented)), color = "violet") +
+  ggtitle("Mt. Auburn Corridor Trip Times by Time of Day, R73 Outbound: PM Peak") +
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)")
+time_change_pm_out
+ggsave( "../r73_time_change_pm_out.png", plot=last_plot())
+```
+
+**Visualization by Seasonal Variation**
+
+*R73 Outbound*
+
+```{r}
+p_season_out <-ggplot(R73_out_clean,
+                      aes(x=time, y=run_time, color = as.factor(seasonal_period), linetype = as.factor(implemented), group=interaction(seasonal_period, implemented))) +
+  geom_smooth(se = TRUE) + geom_smooth(se = TRUE) +
+  ggtitle("Mt. Auburn Corridor Trip Times by Season, R73 Outbound")+
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)") +
+  labs(color="Seasonal Period", linetype="Implemented")
+p_season_out
+ggsave("../season_time_change_R73_out.png", plot=last_plot())
+```
+
+*R73 Inbound*
+```{r}
+p_season_in <-ggplot(R73_in_clean,
+                      aes(x=time, y=run_time, color = as.factor(seasonal_period), linetype = as.factor(implemented), group=interaction(seasonal_period, implemented))) +
+  geom_smooth(se = TRUE) + geom_smooth(se = TRUE) +
+  ggtitle("Mt. Auburn Corridor Trip Times by Season, R73 Inbound")+
+  xlab("Time of Day") +
+  ylab("Corridor Travel Time (mins)") +
+  labs(color="Seasonal Period", linetype="Implemented")
+p_season_in
+ggsave("../season_time_change_R73_in.png", plot=last_plot())
+```
+
+**Visualizing Reliability**
+
+```{r}
+# Change box plot colors by groups
+boxplot_in <- ggplot(R73_in_clean, aes(x=implemented, y=run_time, fill=peak)) +
+  geom_boxplot() + ggtitle("Median Run Times by Lane Implementation and Peak Period: R73 Inbound") +
+  xlab("Implementation (0 = before, 1 = after)") +
+  ylab("Corridor Travel Time (mins)")
+boxplot_in
+ggsave( "../r73_boxplot_in.png", plot=last_plot())
+
+boxplot_out <- ggplot(R73_out_clean, aes(x=implemented, y=run_time, fill=peak)) +
+  geom_boxplot() + ggtitle("Median Times by Lane Implementation and Peak Period: R73 Outbound") +
+  xlab("Implementation (0 = before, 1 = after)") +
+  ylab("Corridor Travel Time (mins)")
+boxplot_out
+ggsave( "../r73_boxplot_in.png", plot=last_plot())
+
+reliability <- ggplot(results_73, aes(fill=peak, y=change_sd, x=direction)) + 
+    geom_bar(position="dodge", stat="identity") + ggtitle("Change in Standard Deviation of Travel Time") +
+  xlab("Implementation (0 = before, 1 = after)") +
+  ylab("Standard Deviation Change")
+reliability
+ggsave("../r73_reliability_73.png", plot=last_plot())
+
+speed <- ggplot(results_73, aes(fill=peak, y=change_time, x=direction)) + 
+    geom_bar(position="dodge", stat="identity")+ ggtitle("Change in Total Travel Time (Mins)") +
+  xlab("Implementation (0 = before, 1 = after)") +
+  ylab("Corridor Travel Time (mins)")
+speed
+ggsave("../r73_speed_73.png", plot=last_plot())
+
+```
+
+**Implications for Bus Service**
+
+Number of vehicles = cycle time / required headway
+
+The current service can be represented as"
+
+$12 = (72) / 6$
+
+*PM*
+
+These savings suggest that for the pm peak period, R73 route would save a median of 3.68 minutes. The R73 currently runs 6 minute headways at the AM peak, with a cycle time of 72 minutes and 12 buses. Even with 3.68 minutes of AM savings service would still need 12 buses:
+
+$c = 72-3.68 / 6 = 11.386$ (and you can't run half a bus).
+
+If the MBTA wanted to run one fewer buses on the route, they could lengthen headways to 6.21 minutes. Alternatively, if the MBTA wanted to lower heaadways with the same number of buses, they could lower headways to 5.7 minutes.
+
+$11 = 72-3.68 / 6.21$ 
+$12 = 72-3.68 / 5.69$ 
+
+*AM* 
+
+These results suggest that for the AM peak period, R73 route would save a median of 5.74 minutes. The R73 currently runs 6 minute headways at the AM peak, with a cycle time of 72 minutes and 12 buses. Even with 3.68 minutes of AM savings service would be able to run one fewer buses, with only slightly worse reliability.
+
+$c = 72-5.74 / 6 = 11.043$
+
+If the MBTA wanted to run one fewer buses on the route, they could lengthen headways to 6.02 minutes. Alternatively, if the MBTA wanted to lower heaadways with the same number of buses, they could lower headways to 5.5 minutes.
+
+$11 = 72-5.74 / 6.02$
+$12 = 72-5.74 / 5.52$
+
+In practice, the MBTA would likely keep the headways at an even integer, for purposes of the route being legible. If the dedicated buslane could be extended further along the route, they may be able to realize an additional 12 seconds of median savings; enough to remove one bus from the road while keeping headways constant and keeping headways at an intger number of minutes. Assuming the same scheduled headways and the same number of buses, the MBTA would then realize greater bus reliability as the schedule has more "slack" to get back on schedule if there are unexpected delays.
+
